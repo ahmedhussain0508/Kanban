@@ -1,5 +1,43 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Calendar, Plus, X, List, CheckSquare, AlignLeft, Edit2, Save, Trash2, MoreVertical, ChevronDown, ChevronRight, Clock, Tag, User, GripVertical } from 'lucide-react';
+import { Calendar, Plus, X, List, CheckSquare, AlignLeft, Edit2, Save, Trash2, MoreVertical, ChevronDown, ChevronRight, Clock, Tag, User, GripVertical, Download, Upload } from 'lucide-react';
+
+// Import storage helper with fallback
+let ElectronStorage;
+try {
+  ElectronStorage = require('./storage').default;
+} catch (error) {
+  console.warn('Storage helper not available, using localStorage fallback');
+  // Create a simple localStorage fallback
+  ElectronStorage = {
+    isElectron: false,
+    async saveData(key, data) {
+      try {
+        localStorage.setItem(key, JSON.stringify(data));
+        return true;
+      } catch (error) {
+        console.error('Failed to save to localStorage:', error);
+        return false;
+      }
+    },
+    async loadData(key) {
+      try {
+        const item = localStorage.getItem(key);
+        return item ? JSON.parse(item) : null;
+      } catch (error) {
+        console.error('Failed to load from localStorage:', error);
+        return null;
+      }
+    },
+    async exportData() {
+      console.warn('Export not available in browser mode');
+      return null;
+    },
+    async importData() {
+      console.warn('Import not available in browser mode');
+      return null;
+    }
+  };
+}
 
 // SimpleMasonry: A lightweight masonry layout component to arrange items in columns.
 // It adjusts the number of columns based on window width.
@@ -52,75 +90,11 @@ const SimpleMasonry = ({ children, breakpointCols, className, columnClassName })
   );
 };
 
-// getInitialBoards: Loads board data from localStorage.
-// If no data is found, or if data is corrupted, it returns a default set of boards.
-// To re-enable verbose logging for debugging localStorage, uncomment the specific console.log lines below.
-const getInitialBoards = () => {
-  // console.log('getInitialBoards called'); // Verbose log, comment out for production
-  const localStorageKey = 'kanbanBoards'; // Define key once for consistency
+// Updated storage functions for Electron
+const getStorageKey = () => 'kanbanBoards';
 
-  try {
-    const storedBoardsRaw = localStorage.getItem(localStorageKey);
-    // console.log('Raw data from localStorage for key "' + localStorageKey + '":', storedBoardsRaw); // Verbose log
-
-    if (!storedBoardsRaw) {
-      // This log is kept active as it's important for diagnosing first-time use or cleared storage.
-      console.log('No data found in localStorage for "' + localStorageKey + '". Initializing with default boards.');
-      // Return default boards structure directly
-      return [
-        {
-          id: 'board-1',
-          title: 'To Do',
-          color: 'bg-red-500',
-          order: 0,
-          tasks: [
-            {
-              id: 'task-1',
-              title: 'Research task management solutions',
-              description: 'Look into existing apps and identify key features',
-              dueDate: '2025-05-20',
-              priority: 'high',
-              tags: ['research', 'planning'],
-              subtasks: [],
-              content: [
-                { type: 'bullet', text: 'Check user reviews' },
-                { type: 'bullet', text: 'Compare pricing models' },
-              ]
-            }
-          ]
-        },
-        {
-          id: 'board-2',
-          title: 'In Progress',
-          color: 'bg-yellow-500',
-          order: 1,
-          tasks: []
-        },
-        {
-          id: 'board-3',
-          title: 'Done',
-          color: 'bg-green-500',
-          order: 2,
-          tasks: []
-        }
-      ];
-    }
-
-    // console.log('Attempting to parse storedBoardsRaw for key "' + localStorageKey + '"...'); // Verbose log
-    const parsedBoards = JSON.parse(storedBoardsRaw);
-    // console.log('Successfully parsed boards from localStorage for key "' + localStorageKey + '":', parsedBoards); // Verbose log
-    return parsedBoards;
-
-  } catch (error) {
-    // These error logs are essential for diagnosing corrupted data.
-    const storedBoardsRawOnError = localStorage.getItem(localStorageKey); 
-    console.error("Failed to parse boards from localStorage for key \"" + localStorageKey + "\":", error); 
-    console.log("Data that caused parsing error for key \"" + localStorageKey + "\":", storedBoardsRawOnError); 
-    // Fallback to default if localStorage is corrupted
-  }
-
-  // This log is kept active as it's important for diagnosing fallback to default data.
-  console.log('getInitialBoards is falling back to default boards after an issue or empty storage for key "' + localStorageKey + '".');
+// Helper function to get default boards
+const getDefaultBoards = () => {
   return [
     {
       id: 'board-1',
@@ -160,6 +134,28 @@ const getInitialBoards = () => {
   ];
 };
 
+const getInitialBoards = async () => {
+  console.log('getInitialBoards called');
+  const storageKey = getStorageKey();
+
+  try {
+    // Try to load from storage (Electron or localStorage)
+    const storedBoards = await ElectronStorage.loadData(storageKey);
+    
+    if (storedBoards) {
+      console.log('Successfully loaded boards from storage:', storedBoards);
+      return storedBoards;
+    }
+
+    console.log('No data found in storage. Initializing with default boards.');
+    return getDefaultBoards();
+
+  } catch (error) {
+    console.error("Failed to load boards from storage:", error);
+    console.log('Falling back to default boards.');
+    return getDefaultBoards();
+  }
+};
 
 const KanbanApp = () => {
   // Define a list of colors for new boards
@@ -170,40 +166,59 @@ const KanbanApp = () => {
     'bg-pink-500', 'bg-rose-500', 'bg-gray-500', 'bg-slate-500', 'bg-zinc-500'
   ];
 
-  // Initialize boards - using getInitialBoards to load from localStorage
-  const [boards, setBoards] = useState(getInitialBoards);
+  // Initialize boards and loading state
+  const [boards, setBoards] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Effect to save the 'boards' state to localStorage whenever it changes.
-  // This ensures data persistence across browser sessions.
+  // Effect to load boards on component mount
   useEffect(() => {
-    const localStorageKey = 'kanbanBoards'; // Ensure key consistency
-    try {
-      // console.log('Saving boards to localStorage:', boards); // Keep this commented unless actively debugging save issues
-      localStorage.setItem(localStorageKey, JSON.stringify(boards));
-    } catch (error) {
-      console.error("Failed to save boards to localStorage for key \"" + localStorageKey + "\":", error);
-    }
-  }, [boards]); // Dependency array: runs whenever 'boards' state changes
-  // --- END NEW ---
+    const initializeBoards = async () => {
+      try {
+        const initialBoards = await getInitialBoards();
+        setBoards(initialBoards);
+      } catch (error) {
+        console.error('Failed to initialize boards:', error);
+        setBoards(getDefaultBoards()); // Fallback if async load fails
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initializeBoards();
+  }, []); // Run once on mount
+
+  // Enhanced effect to save the 'boards' state to persistent storage whenever it changes.
+  useEffect(() => {
+    if (isLoading) return; // Don't save during initial load
+
+    const saveBoards = async () => {
+      const storageKey = getStorageKey();
+      try {
+        console.log('Saving boards to storage:', boards);
+        await ElectronStorage.saveData(storageKey, boards);
+      } catch (error) {
+        console.error("Failed to save boards to storage for key \"" + storageKey + "\":", error);
+      }
+    };
+
+    saveBoards();
+  }, [boards, isLoading]); // Depend on boards and isLoading
 
   // State for UI interactions
-  const [dragging, setDragging] = useState(null); // Stores data of the task being dragged
-  const [draggingBoard, setDraggingBoard] = useState(null); // Stores ID of the board being dragged
-  const [showDatePicker, setShowDatePicker] = useState(null); // Controls visibility of the date picker; stores { taskId, boardId }
-  const [openTasks, setOpenTasks] = useState({}); // Tracks which tasks are expanded (details visible)
-  // taskContentView: Manages the view mode for task content (e.g., 'text' for description, 'list' for checklist)
+  const [dragging, setDragging] = useState(null);
+  const [draggingBoard, setDraggingBoard] = useState(null);
+  const [showDatePicker, setShowDatePicker] = useState(null);
+  const [openTasks, setOpenTasks] = useState({});
   const [taskContentView, setTaskContentView] = useState({});
-  // editingTaskInline: Tracks which task field (priority/date) is being edited directly in the collapsed task view.
-  // Stores an object like { taskId: 'task-1', field: 'priority' } or null.
   const [editingTaskInline, setEditingTaskInline] = useState(null);
-  const [currentDate, setCurrentDate] = useState(new Date()); // Current date for the date picker
-  const [datePickerPosition, setDatePickerPosition] = useState({ top: 0, left: 0 }); // Position for the date picker
-  const [editingTitle, setEditingTitle] = useState(null); // ID of the task whose title is being edited
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [datePickerPosition, setDatePickerPosition] = useState({ top: 0, left: 0 });
+  const [editingTitle, setEditingTitle] = useState(null);
   const [editingBoardTitle, setEditingBoardTitle] = useState(null);
   const [collapsedBoards, setCollapsedBoards] = useState({});
   const [activeDropdown, setActiveDropdown] = useState(null);
   const dropdownRef = useRef(null);
-  const datePickerRef = useRef(null); // New ref for date picker
+  const datePickerRef = useRef(null);
 
   // Priority colors
   const priorityColors = {
@@ -224,11 +239,39 @@ const KanbanApp = () => {
     500: 1
   };
 
+  // Export data function
+  const exportData = async () => {
+    try {
+      const filePath = await ElectronStorage.exportData(getStorageKey());
+      if (filePath) {
+        alert(`Data exported successfully to: ${filePath}`);
+      }
+    } catch (error) {
+      console.error('Failed to export data:', error);
+      alert('Failed to export data. Please try again.');
+    }
+  };
+
+  // Import data function
+  const importData = async () => {
+    try {
+      const data = await ElectronStorage.importData(getStorageKey());
+      if (data) {
+        setBoards(data);
+        alert('Data imported successfully!');
+      }
+    } catch (error) {
+      console.error('Failed to import data:', error);
+      alert('Failed to import data. Please check the file format and try again.');
+    }
+  };
+
+  // Keep all your existing functions exactly as they are...
+  // (I'm keeping the paste.txt content for the rest of the functions)
+
   // Toggle dropdown menu
   const toggleDropdown = (boardId, event) => {
-    // Stop event propagation to prevent other click handlers (e.g., on the board itself) from firing.
     event.stopPropagation();
-
     if (activeDropdown === boardId) {
       setActiveDropdown(null);
     } else {
@@ -251,10 +294,10 @@ const KanbanApp = () => {
 
       // Close date picker
       if (
-        showDatePicker && // Check if any date picker is open
+        showDatePicker &&
         datePickerRef.current &&
         !datePickerRef.current.contains(event.target) &&
-        !event.target.closest('.date-picker-trigger') // Class on the button that opens the date picker
+        !event.target.closest('.date-picker-trigger')
       ) {
         setShowDatePicker(null);
       }
@@ -262,53 +305,45 @@ const KanbanApp = () => {
 
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
-  }, [activeDropdown, showDatePicker, editingTaskInline]); // Add editingTaskInline
+  }, [activeDropdown, showDatePicker, editingTaskInline]);
 
   // Effect to reposition date picker on scroll or resize
   useEffect(() => {
-    if (!showDatePicker) return; // Only run if a date picker is open
+    if (!showDatePicker) return;
 
     const updatePosition = () => {
-      // Find the trigger button using its data-task-id
       const triggerButton = document.querySelector(`.date-picker-trigger[data-task-id="${showDatePicker.taskId}"]`);
       if (triggerButton) {
         const rect = triggerButton.getBoundingClientRect();
-        let top = rect.bottom + 5; // 5px below the button
-        const pickerWidth = 288; // w-72 = 288px
-        const pickerHeight = 300; // Approximate height of the date picker
+        let top = rect.bottom + 5;
+        const pickerWidth = 288;
+        const pickerHeight = 300;
 
-        // Align right edge of picker with right edge of button
-        let left = rect.right - pickerWidth; 
+        let left = rect.right - pickerWidth;
 
-        // Ensure picker stays within viewport
-        if (left < 10) left = 10; // Don't go too far left
+        if (left < 10) left = 10;
         if (left + pickerWidth > window.innerWidth - 10) {
-          left = window.innerWidth - pickerWidth - 10; // Don't go too far right
+          left = window.innerWidth - pickerWidth - 10;
         }
         if (top + pickerHeight > window.innerHeight - 10) {
-          top = rect.top - pickerHeight - 5; // Position above the button if not enough space below
+          top = rect.top - pickerHeight - 5;
         }
 
         setDatePickerPosition({ top, left });
       } else {
-        // If the trigger button is no longer in the DOM (e.g., task deleted or collapsed)
         setShowDatePicker(null);
       }
     };
 
-    // Initial position update when picker opens
     updatePosition();
-
-    // Add event listeners for dynamic repositioning
     window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true); // Use capture phase for scroll events
+    window.addEventListener('scroll', updatePosition, true);
     
     return () => {
-      // Clean up event listeners
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
-  }, [showDatePicker]); // Re-run this effect when showDatePicker changes
+  }, [showDatePicker]);
 
   // Toggle board collapse
   const toggleBoardCollapse = (boardId) => {
@@ -325,30 +360,22 @@ const KanbanApp = () => {
     e.dataTransfer.setData('board/id', boardId);
 
     const boardElement = e.currentTarget.closest('[data-board-id]');
-
     if (boardElement) {
-      // Set the drag image to be the board itself, relative to cursor position on the handle
       try {
-        // Create a clone for the drag image for more reliable styling
         const clone = boardElement.cloneNode(true);
-        // Minimal styling for the clone if needed, e.g., ensure visibility
         clone.style.position = 'absolute';
-        clone.style.left = '-9999px'; // Position off-screen
+        clone.style.left = '-9999px';
         clone.style.width = boardElement.offsetWidth + 'px';
         clone.style.height = boardElement.offsetHeight + 'px';
-        clone.style.pointerEvents = 'none'; // Prevent interference
-        document.body.appendChild(clone); // Must be in DOM to be used by setDragImage (in some browsers)
+        clone.style.pointerEvents = 'none';
+        document.body.appendChild(clone);
         
-        // Calculate offset from the board's top-left (where the cursor clicked on the drag handle)
-        // relative to the board's own top-left corner. This makes the drag image align correctly with the cursor.
         const rect = boardElement.getBoundingClientRect();
         const offsetX = e.clientX - rect.left;
         const offsetY = e.clientY - rect.top;
 
         e.dataTransfer.setDragImage(clone, offsetX, offsetY);
         
-        // The clone needs to be removed from the DOM. A small delay ensures the browser
-        // has captured the image before the clone is removed.
         setTimeout(() => {
             if (clone.parentNode) {
                 clone.parentNode.removeChild(clone);
@@ -356,21 +383,15 @@ const KanbanApp = () => {
         }, 0);
 
       } catch (err) {
-        console.warn("setDragImage failed:", err); // Keep this for diagnosing browser-specific issues
-        // Fallback: For browsers that are picky, or if cloning fails,
-        // the default (likely just the handle) will be used.
-        // We still apply styles to the original board.
+        console.warn("setDragImage failed:", err);
       }
 
-      // Style the original board element to show it's being dragged (ghost)
-      // Apply this after setDragImage or within setTimeout to ensure the drag image is of the original state
       setTimeout(() => {
-        boardElement.style.opacity = '0.4'; // More transparent
-        boardElement.style.transform = 'rotate(3deg) scale(0.95)'; // Rotate and slightly shrink
-        boardElement.style.boxShadow = '0 15px 30px rgba(0,0,0,0.3)'; // More prominent shadow
+        boardElement.style.opacity = '0.4';
+        boardElement.style.transform = 'rotate(3deg) scale(0.95)';
+        boardElement.style.boxShadow = '0 15px 30px rgba(0,0,0,0.3)';
         boardElement.style.transition = 'opacity 0.2s ease-out, transform 0.2s ease-out, box-shadow 0.2s ease-out';
       }, 0);
-
     } else {
       console.warn("Board element not found for drag start:", boardId);
     }
@@ -383,8 +404,8 @@ const KanbanApp = () => {
     if (boardElement) {
       boardElement.style.opacity = '';
       boardElement.style.transform = '';
-      boardElement.style.boxShadow = ''; // Clear the shadow
-      boardElement.style.transition = ''; // Clear transition
+      boardElement.style.boxShadow = '';
+      boardElement.style.transition = '';
     }
   };
 
@@ -393,7 +414,6 @@ const KanbanApp = () => {
       e.preventDefault();
       e.stopPropagation();
       
-      // Add visual feedback
       e.currentTarget.style.transform = 'scale(1.02)';
       e.currentTarget.style.boxShadow = '0 8px 16px rgba(59, 130, 246, 0.3)';
       e.currentTarget.style.border = '2px dashed rgb(59, 130, 246)';
@@ -402,7 +422,6 @@ const KanbanApp = () => {
 
   const handleBoardDragLeave = (e) => {
     if (draggingBoard) {
-      // Remove visual feedback
       e.currentTarget.style.transform = '';
       e.currentTarget.style.boxShadow = '';
       e.currentTarget.style.border = '';
@@ -415,7 +434,6 @@ const KanbanApp = () => {
     e.preventDefault();
     e.stopPropagation();
     
-    // Remove visual feedback
     e.currentTarget.style.transform = '';
     e.currentTarget.style.boxShadow = '';
     e.currentTarget.style.border = '';
@@ -437,11 +455,9 @@ const KanbanApp = () => {
       return;
     }
 
-    // Reorder boards
     const [draggedBoard] = newBoards.splice(draggedBoardIndex, 1);
     newBoards.splice(targetBoardIndex, 0, draggedBoard);
 
-    // Update order property
     newBoards.forEach((board, index) => {
       board.order = index;
     });
@@ -450,7 +466,7 @@ const KanbanApp = () => {
     setDraggingBoard(null);
   };
 
-  // Task drag handlers (keeping existing logic)
+  // Task drag handlers
   const handleTaskDragStart = (e, boardId, taskId, isSubtask = false, parentTaskId = null) => {
     e.stopPropagation();
     const dragData = {
@@ -468,7 +484,6 @@ const KanbanApp = () => {
     e.currentTarget.classList.remove('opacity-50', 'rotate-1');
     setDragging(null);
     
-    // Clean up any drag feedback
     document.querySelectorAll('.bg-blue-50').forEach(el => {
       el.classList.remove('bg-blue-50', 'border-blue-400', 'scale-[1.02]');
       el.style.borderStyle = '';
@@ -498,22 +513,11 @@ const KanbanApp = () => {
   };
 
   const handleTaskDrop = (e, targetBoardId, targetTaskId = null) => {
-    // Most verbose logs are commented out below. Uncomment for detailed drag-and-drop debugging.
-    // console.log('[DEBUG] handleTaskDrop triggered. TargetBoard:', targetBoardId, 'TargetTask:', targetTaskId);
-    // try {
-    //     const jsonData = e.dataTransfer.getData('application/json');
-    //     console.log('[DEBUG] Dragging data from e.dataTransfer:', jsonData ? JSON.parse(jsonData) : 'undefined');
-    // } catch (error) {
-    //     // This warning is kept active as it indicates a potential issue with data transfer during drag/drop.
-    //     console.warn('  Could not get dataTransfer application/json:', error);
-    // }
-
     if (!dragging) return;
     
     e.preventDefault();
     e.stopPropagation();
     
-    // Remove visual feedback
     const target = e.currentTarget;
     target.classList.remove('bg-blue-50', 'border-blue-400', 'scale-[1.02]');
     target.style.borderStyle = '';
@@ -524,20 +528,17 @@ const KanbanApp = () => {
       if (!jsonData) return;
       
       const dragData = JSON.parse(jsonData);
-      // console.log('[DEBUG] Parsed Drag Data:', dragData);
       const { boardId: sourceBoardId, taskId: sourceTaskId, isSubtask, parentTaskId } = dragData;
       
       if (targetTaskId === sourceTaskId) return;
       
       const newBoards = JSON.parse(JSON.stringify(boards));
       
-      // Find and remove task logic (keeping existing)
       const findAndRemoveTask = (boardTasks, taskId) => {
         for (let i = 0; i < boardTasks.length; i++) {
           if (boardTasks[i].id === taskId) {
             return boardTasks.splice(i, 1)[0];
           }
-          // Ensure subtasks exist and is an array before attempting to recurse.
           if (boardTasks[i].subtasks && Array.isArray(boardTasks[i].subtasks)) {
             const fromSubtasks = findAndRemoveTask(boardTasks[i].subtasks, taskId);
             if (fromSubtasks) return fromSubtasks;
@@ -548,37 +549,23 @@ const KanbanApp = () => {
       
       const sourceBoardIndex = newBoards.findIndex(b => b.id === sourceBoardId);
       if (sourceBoardIndex === -1) {
-        console.error('  Source board not found:', sourceBoardId); // Keep this error active
+        console.error('Source board not found:', sourceBoardId);
         return;
       }
       
       const taskToMove = findAndRemoveTask(newBoards[sourceBoardIndex].tasks, sourceTaskId);
       if (!taskToMove) {
-        console.error('  Task to move not found in source board:', sourceTaskId, 'on board', sourceBoardId); // Keep this error active
+        console.error('Task to move not found in source board:', sourceTaskId, 'on board', sourceBoardId);
         return;
       }
       
       const targetBoardIndex = newBoards.findIndex(b => b.id === targetBoardId);
       if (targetBoardIndex === -1) {
-        console.error('  Target board not found:', targetBoardId); // Keep this error active
+        console.error('Target board not found:', targetBoardId);
         return;
       }
       
-      // Verbose logs about the task being moved and the action (can be re-enabled for deep debugging):
-      // try {
-      //   console.log('[DEBUG] Task to Move (cloned for logging):', JSON.parse(JSON.stringify(taskToMove)));
-      // } catch (cloneError) {
-      //   // This warning is kept as it might indicate issues with task data structure if cloning fails.
-      //   console.warn('  Could not deep clone taskToMove for logging:', cloneError, taskToMove);
-      // }
-      // if (targetTaskId) {
-      //   console.log(`[DEBUG] Action: Add as subtask to task ${targetTaskId} on board ${targetBoardId}`);
-      // } else {
-      //   console.log(`[DEBUG] Action: Add as parent task to board ${targetBoardId}`);
-      // }
-      
       if (targetTaskId) {
-        // Add as subtask logic (keeping existing)
         const addSubtask = (tasks, parentId, newSubtask) => {
           for (let i = 0; i < tasks.length; i++) {
             if (tasks[i].id === parentId) {
@@ -592,7 +579,6 @@ const KanbanApp = () => {
         
         addSubtask(newBoards[targetBoardIndex].tasks, targetTaskId, taskToMove);
       } else {
-        // console.log(`[DEBUG] Action: Add as parent task to board ${targetBoardId}`); // Verbose log
         newBoards[targetBoardIndex].tasks.push(taskToMove);
       }
       
@@ -603,9 +589,43 @@ const KanbanApp = () => {
     }
   };
 
+  // IMPROVED: Board drop zone handler
+  const handleBoardAreaDrop = (e, targetBoardId) => {
+    console.log(`Board area drop triggered for board ${targetBoardId}. Dragging:`, dragging);
+    
+    if (dragging && !draggingBoard) {
+      // This is a task being dropped on the board area (not on a specific task)
+      e.preventDefault();
+      e.stopPropagation();
+      handleTaskDrop(e, targetBoardId, null);
+    }
+  };
+
+  const handleBoardAreaDragOver = (e) => {
+    if (dragging && !draggingBoard) {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Visual feedback for board area
+      const target = e.currentTarget;
+      target.style.backgroundColor = 'rgba(59, 130, 246, 0.1)';
+      target.style.borderRadius = '8px';
+      target.style.transition = 'background-color 0.2s ease';
+    }
+  };
+
+  const handleBoardAreaDragLeave = (e) => {
+    if (dragging && !draggingBoard) {
+      const target = e.currentTarget;
+      target.style.backgroundColor = '';
+    }
+  };
+
+  // Keep all your existing functions for task management, board management, etc.
+  // (The rest of your functions from the paste.txt file)
+
   // Toggle task title editing
   const toggleTaskTitleEditing = (taskId, event) => {
-    // Stop propagation to prevent card's onClick (toggleTaskDetails) from firing
     if (event) {
       event.stopPropagation();
     }
@@ -614,8 +634,6 @@ const KanbanApp = () => {
   
   // Update task title
   const updateTaskTitle = (boardId, taskId, newTitle, event) => {
-    // Stop propagation if called from an event (e.g. input's onBlur)
-    // to prevent card's onClick from firing.
     if (event) {
       event.stopPropagation();
     }
@@ -646,7 +664,6 @@ const KanbanApp = () => {
   
   // Toggle board title editing
   const toggleBoardTitleEditing = (boardId, event) => {
-    // Stop propagation to prevent card's onClick (e.g. board collapse) from firing
     if (event) {
       event.stopPropagation();
     }
@@ -655,7 +672,6 @@ const KanbanApp = () => {
   
   // Update board title
   const updateBoardTitle = (boardId, newTitle, event) => {
-    // Stop propagation if called from an event
     if (event) {
       event.stopPropagation();
     }
@@ -738,31 +754,28 @@ const KanbanApp = () => {
   };
 
   // Toggle date picker
-  const toggleDatePicker = (e, taskId, boardId) => { // Now accepts boardId
-    // Stop propagation to prevent card's onClick (toggleTaskDetails) or other parent handlers.
+  const toggleDatePicker = (e, taskId, boardId) => {
     e.stopPropagation();
     if (showDatePicker && showDatePicker.taskId === taskId) {
-      setShowDatePicker(null); // Close if already open for this task
+      setShowDatePicker(null);
     } else {
       const rect = e.currentTarget.getBoundingClientRect();
-      let top = rect.bottom + 5; // 5px below the button
-      const pickerWidth = 288; // w-72 = 288px
-      const pickerHeight = 300; // Approximate height of the date picker
+      let top = rect.bottom + 5;
+      const pickerWidth = 288;
+      const pickerHeight = 300;
 
-      // Align right edge of picker with right edge of button
-      let left = rect.right - pickerWidth; 
+      let left = rect.right - pickerWidth;
 
-      // Ensure picker stays within viewport
-      if (left < 10) left = 10; // Don't go too far left
+      if (left < 10) left = 10;
       if (left + pickerWidth > window.innerWidth - 10) {
-        left = window.innerWidth - pickerWidth - 10; // Don't go too far right
+        left = window.innerWidth - pickerWidth - 10;
       }
       if (top + pickerHeight > window.innerHeight - 10) {
-        top = rect.top - pickerHeight - 5; // Position above the button if not enough space below
+        top = rect.top - pickerHeight - 5;
       }
 
       setDatePickerPosition({ top, left });
-      setShowDatePicker({ taskId, boardId }); // Store both taskId and boardId
+      setShowDatePicker({ taskId, boardId });
     }
   };
 
@@ -783,8 +796,8 @@ const KanbanApp = () => {
     
     return (
       <div 
-        ref={datePickerRef} // Attach ref here
-        className="fixed bg-white shadow-xl rounded-lg p-4 z-50 w-72 border border-gray-200" // Changed to fixed
+        ref={datePickerRef}
+        className="fixed bg-white shadow-xl rounded-lg p-4 z-50 w-72 border border-gray-200"
         style={{ top: datePickerPosition.top + 'px', left: datePickerPosition.left + 'px' }}
         onClick={(e) => e.stopPropagation()} 
       >
@@ -833,6 +846,17 @@ const KanbanApp = () => {
             </div>
           ))}
         </div>
+        
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <button 
+            className="w-full text-sm text-red-600 hover:bg-red-50 p-2 rounded transition-colors"
+            onClick={() => {
+              setDueDate(taskId, boardId, '');
+            }}
+          >
+            Clear Date
+          </button>
+        </div>
       </div>
     );
   };
@@ -864,19 +888,17 @@ const KanbanApp = () => {
   };
 
   // Toggle task details' visibility.
-  // Also resets the specific task's content view (text/list) if the details are being closed.
   const toggleTaskDetails = (taskId) => {
-    const isCurrentlyOpen = openTasks[taskId]; // Check state before toggling
+    const isCurrentlyOpen = openTasks[taskId];
     setOpenTasks(prev => ({
         ...prev,
-        [taskId]: !prev[taskId] // Toggle the open state for the specific task
+        [taskId]: !prev[taskId]
     }));
 
-    // If the task was open and is now being closed, reset its content view mode.
     if (isCurrentlyOpen) { 
         setTaskContentView(prev => {
             const newState = { ...prev };
-            delete newState[taskId]; // Clear the specific view mode for this task
+            delete newState[taskId];
             return newState;
         });
     }
@@ -888,7 +910,7 @@ const KanbanApp = () => {
     const newBoard = {
       id: `board-${Date.now()}`,
       title: 'New Board',
-      color: randomColor, // Assign a random color
+      color: randomColor,
       order: boards.length,
       tasks: []
     };
@@ -963,7 +985,7 @@ const KanbanApp = () => {
         }
       }
       return false;
-    };
+    }
     
     const boardIndex = newBoards.findIndex(board => board.id === boardId);
     if (boardIndex !== -1) {
@@ -1014,10 +1036,8 @@ const KanbanApp = () => {
                     type="text"
                     className="flex-1 p-2 text-sm border rounded-md mr-2"
                     value={task.title}
-                    // Live update task title in local component state for responsiveness
                     onChange={(e) => {
                       const newBoards = [...boards];
-                      // Helper to find and update task title, including in subtasks
                       const updateTaskTitleInState = (tasks, targetId, newTitle) => { 
                         for (let i = 0; i < tasks.length; i++) {
                           if (tasks[i].id === targetId) {
@@ -1032,10 +1052,9 @@ const KanbanApp = () => {
                       if (boardIndex !== -1) {
                         updateTaskTitleInState(newBoards[boardIndex].tasks, task.id, e.target.value);
                       }
-                      setBoards(newBoards); // This triggers the save to localStorage via useEffect
+                      setBoards(newBoards);
                     }}
                     autoFocus
-                    // Final update and close edit mode on blur or Enter
                     onBlur={(e) => updateTaskTitle(boardId, task.id, e.target.value, e)} 
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -1045,7 +1064,6 @@ const KanbanApp = () => {
                   />
                   <button 
                     className="p-1 text-gray-500 hover:text-green-600 transition-colors"
-                    // Save current input value and close edit mode
                     onClick={(e) => updateTaskTitle(boardId, task.id, task.title, e)}
                   >
                     <Save size={16} />
@@ -1056,7 +1074,7 @@ const KanbanApp = () => {
                   <h3 className="font-medium text-gray-800 mr-2">{task.title}</h3>
                   <button 
                     className="text-gray-400 hover:text-blue-600 ml-1 transition-colors"
-                    onClick={(e) => toggleTaskTitleEditing(task.id, e)} // Pass event to stop propagation
+                    onClick={(e) => toggleTaskTitleEditing(task.id, e)}
                   >
                     <Edit2 size={14} />
                   </button>
@@ -1067,7 +1085,7 @@ const KanbanApp = () => {
               <button 
                 className="text-gray-400 hover:text-red-600 transition-colors"
                 onClick={(e) => {
-                  e.stopPropagation(); // Prevent card's onClick (toggleTaskDetails)
+                  e.stopPropagation();
                   deleteTask(boardId, task.id);
                 }}
               >
@@ -1076,55 +1094,55 @@ const KanbanApp = () => {
             </div>
           </div>
           
-          {/* Collapsed Task View: Priority and Due Date (inline editable) */}
+          {/* FIXED: Collapsed Task View - Always show priority and date picker */}
           <div className="flex items-center space-x-2 flex-wrap">
-            {task.priority && (
-              editingTaskInline?.taskId === task.id && editingTaskInline?.field === 'priority' ? (
-                // Inline select for priority
-                <select
-                  value={task.priority}
-                  onChange={(e) => {
-                    updateTaskPriority(boardId, task.id, e.target.value);
-                    setEditingTaskInline(null); // Close select after change
-                  }}
-                  onBlur={() => setEditingTaskInline(null)} // Close select on blur
-                  onClick={(e) => e.stopPropagation()} // Prevent card's onClick
-                  className={`text-xs p-1 rounded border ${priorityColors[task.priority]} bg-white shadow`}
-                  autoFocus
-                >
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              ) : (
-                // Button to enable priority editing
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation(); // Prevent card's onClick
-                    setEditingTaskInline({ taskId: task.id, field: 'priority' });
-                  }}
-                  className={`text-xs px-2 py-1 rounded-full border ${priorityColors[task.priority]} hover:opacity-75 transition-opacity`}
-                >
-                  {task.priority}
-                </button>
-              )
-            )}
-            {task.dueDate && (
-              // Button to open date picker for due date
-              <button
-                className="flex items-center space-x-1 hover:opacity-75 transition-opacity date-picker-trigger"
-                onClick={(e) => {
-                  // toggleDatePicker already includes stopPropagation
-                  toggleDatePicker(e, task.id, boardId);
+            {/* Priority always shown */}
+            {editingTaskInline?.taskId === task.id && editingTaskInline?.field === 'priority' ? (
+              <select
+                value={task.priority}
+                onChange={(e) => {
+                  updateTaskPriority(boardId, task.id, e.target.value);
+                  setEditingTaskInline(null);
                 }}
-                data-task-id={task.id} // For date picker positioning
+                onBlur={() => setEditingTaskInline(null)}
+                onClick={(e) => e.stopPropagation()}
+                className={`text-xs p-1 rounded border ${priorityColors[task.priority]} bg-white shadow`}
+                autoFocus
               >
-                <Calendar size={14} className={isOverdue ? 'text-red-500' : 'text-gray-500'} />
-                <span className={`text-xs px-2 py-1 rounded ${isOverdue ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700'}`}>
-                  {new Date(task.dueDate).toLocaleDateString()}
-                </span>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingTaskInline({ taskId: task.id, field: 'priority' });
+                }}
+                className={`text-xs px-2 py-1 rounded-full border ${priorityColors[task.priority]} hover:opacity-75 transition-opacity`}
+              >
+                {task.priority}
               </button>
             )}
+            
+            {/* FIXED: Date picker button always shown */}
+            <button
+              className="flex items-center space-x-1 hover:opacity-75 transition-opacity date-picker-trigger"
+              onClick={(e) => {
+                toggleDatePicker(e, task.id, boardId);
+              }}
+              data-task-id={task.id}
+            >
+              <Calendar size={14} className={isOverdue ? 'text-red-500' : 'text-gray-500'} />
+              <span className={`text-xs px-2 py-1 rounded ${
+                task.dueDate 
+                  ? (isOverdue ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700')
+                  : 'bg-gray-50 text-gray-500 border border-gray-300'
+              }`}>
+                {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'Set date'}
+              </span>
+            </button>
+            
             {task.subtasks.length > 0 && (
               <span className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-800">
                 {task.subtasks.length} subtasks
@@ -1135,15 +1153,13 @@ const KanbanApp = () => {
         
         {isOpen && (
           <div className="px-4 pb-4 border-t border-gray-100">
-            {/* Container for Text/List buttons */}
             <div className="mt-3 flex items-center space-x-2">
               <button
                 className={`text-xs flex items-center px-3 py-1 rounded transition-colors ${taskContentView[task.id] === 'text' || (!taskContentView[task.id] && task.description) ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
                 onClick={(e) => {
-                    e.stopPropagation(); // Prevent card's onClick
+                    e.stopPropagation();
                     setTaskContentView(prev => {
                         const currentView = prev[task.id];
-                        // Toggle to 'text' view, or clear if already 'text'
                         return { ...prev, [task.id]: currentView === 'text' ? null : 'text' };
                     });
                 }}
@@ -1153,10 +1169,9 @@ const KanbanApp = () => {
               <button
                 className={`text-xs flex items-center px-3 py-1 rounded transition-colors ${taskContentView[task.id] === 'list' || (!taskContentView[task.id] && task.content?.length > 0 && !task.description) ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
                 onClick={(e) => {
-                    e.stopPropagation(); // Prevent card's onClick
+                    e.stopPropagation();
                     setTaskContentView(prev => {
                         const currentView = prev[task.id];
-                        // Toggle to 'list' view, or clear if already 'list'
                         return { ...prev, [task.id]: currentView === 'list' ? null : 'list' };
                     });
                 }}
@@ -1165,13 +1180,12 @@ const KanbanApp = () => {
               </button>
             </div>
 
-            {/* Conditional rendering for Text (Description) or List (Content Items) */}
             {(taskContentView[task.id] === 'text' || (!taskContentView[task.id] && task.description)) && (
               <div className="mt-3">
                 <textarea
                   className="w-full p-3 border rounded-md text-sm resize-none"
                   value={task.description}
-                  onChange={(e) => { // Update description in main state
+                  onChange={(e) => {
                     const newBoards = [...boards];
                     const updateDesc = (tasks, id, desc) => tasks.forEach(t => {
                       if (t.id === id) t.description = desc;
@@ -1182,7 +1196,7 @@ const KanbanApp = () => {
                     setBoards(newBoards);
                   }}
                   rows="3"
-                  onClick={(e) => e.stopPropagation()} // Prevent card's onClick
+                  onClick={(e) => e.stopPropagation()}
                 />
               </div>
             )}
@@ -1195,11 +1209,11 @@ const KanbanApp = () => {
                       <span className="mr-2 text-gray-500 flex-shrink-0 mt-2">
                         {item.type === 'bullet' ? '•' : `${index + 1}.`}
                       </span>
-                      <input // Editable content item text
+                      <input
                         type="text"
                         className="flex-1 p-2 border rounded-md text-sm"
                         value={item.text}
-                        onChange={(e) => { // Update item text in main state
+                        onChange={(e) => {
                           const newBoards = [...boards];
                           const updateItemText = (tasks, id, itemIdx, text) => tasks.forEach(t => {
                             if (t.id === id) t.content[itemIdx].text = text;
@@ -1209,12 +1223,12 @@ const KanbanApp = () => {
                           if (boardIdx !== -1) updateItemText(newBoards[boardIdx].tasks, task.id, index, e.target.value);
                           setBoards(newBoards);
                         }}
-                        onClick={(e) => e.stopPropagation()} // Prevent card's onClick
+                        onClick={(e) => e.stopPropagation()}
                       />
-                      <button // Delete content item
+                      <button
                         className="ml-2 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-1"
                         onClick={(e) => {
-                          e.stopPropagation(); // Prevent card's onClick
+                          e.stopPropagation();
                           deleteContentItem(task.id, boardId, index);
                         }}
                         title="Delete item"
@@ -1224,7 +1238,7 @@ const KanbanApp = () => {
                     </div>
                   ))}
                 </div>
-                <div className="flex space-x-2 mt-3"> {/* Add Bullet/Numbered buttons */}
+                <div className="flex space-x-2 mt-3">
                   <button
                     className="text-xs flex items-center px-3 py-1 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
                     onClick={(e) => { e.stopPropagation(); addContentItem(task.id, boardId, 'bullet'); }}
@@ -1241,7 +1255,6 @@ const KanbanApp = () => {
               </div>
             )}
             
-            {/* Subtasks Section */}
             {task.subtasks.length > 0 && (
               <div className="mt-4 max-h-64 overflow-y-auto">
                 <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Subtasks</h4>
@@ -1257,12 +1270,45 @@ const KanbanApp = () => {
   // Sort boards by order
   const sortedBoards = [...boards].sort((a, b) => (a.order || 0) - (b.order || 0));
 
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen p-6 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading your Kanban boards...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen p-6">
       <header className="bg-white shadow-sm rounded-xl p-6 mb-6">
         <div className="flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-800">Kanban Board</h1>
           <div className="flex items-center space-x-3">
+            {/* Export/Import buttons - only show in Electron */}
+            {ElectronStorage.isElectron && (
+              <>
+                <button
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center"
+                  onClick={exportData}
+                  title="Export data to file"
+                >
+                  <Download size={20} className="mr-1" />
+                  Export
+                </button>
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center"
+                  onClick={importData}
+                  title="Import data from file"
+                >
+                  <Upload size={20} className="mr-1" />
+                  Import
+                </button>
+              </>
+            )}
             <button
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center"
               onClick={addNewBoard}
@@ -1272,6 +1318,13 @@ const KanbanApp = () => {
             </button>
           </div>
         </div>
+        
+        {/* Show data location info in Electron */}
+        {ElectronStorage.isElectron && (
+          <div className="mt-2 text-sm text-gray-500">
+            Data is automatically saved to your system's application data folder
+          </div>
+        )}
       </header>
       
       <SimpleMasonry
@@ -1285,14 +1338,13 @@ const KanbanApp = () => {
             data-board-id={board.id}
             className="bg-white rounded-xl shadow-sm overflow-hidden transition-all duration-200 hover:shadow-md"
             onDragOver={handleBoardDragOver}
-            onDragLeave={handleBoardDragLeave} // Make sure this is present
+            onDragLeave={handleBoardDragLeave}
             onDrop={(e) => {
-              // ADD THIS LOG HERE:
               console.log(`onDrop called on BOARD ${board.id}. Dragging board: ${draggingBoard}, Dragging task: ${dragging}`);
               if (draggingBoard) {
                 handleBoardDrop(e, board.id);
-              } else if (dragging) { // 'dragging' should be the task drag data
-                handleTaskDrop(e, board.id, null); // targetTaskId is null here
+              } else if (dragging) {
+                handleTaskDrop(e, board.id, null);
               }
             }}
           >
@@ -1301,7 +1353,6 @@ const KanbanApp = () => {
             >
               <div className="flex justify-between items-center">
                 <div className="flex items-center space-x-2 flex-1">
-                  {/* Draggable grip area */}
                   <div
                     className="cursor-move flex items-center space-x-2"
                     draggable="true"
@@ -1384,7 +1435,6 @@ const KanbanApp = () => {
                   <span className="bg-white bg-opacity-30 text-white text-sm px-2 py-1 rounded-full">
                     {board.tasks.length}
                   </span>
-                  {/* Changed to relative positioning for the dropdown */}
                   <div className="relative">
                     <button
                       className="text-white hover:text-gray-200 p-1 rounded hover:bg-white hover:bg-opacity-20 transition-colors"
@@ -1396,11 +1446,10 @@ const KanbanApp = () => {
                     {activeDropdown === board.id && (
                       <div 
                         ref={dropdownRef}
-                        className="absolute bg-white rounded-lg shadow-xl border p-2 z-50 top-full right-0 mt-2 w-48" // Adjusted positioning and width
+                        className="absolute bg-white rounded-lg shadow-xl border p-2 z-50 top-full right-0 mt-2 w-48"
                         onClick={(e) => e.stopPropagation()} 
                       >
                         <div className="space-y-1">
-                          {/* Delete Board Section */}
                           <div>
                             <button
                               className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors flex items-center"
@@ -1409,7 +1458,7 @@ const KanbanApp = () => {
                                 deleteBoard(board.id);
                               }}
                             >
-                              <Trash2 size={16} className="mr-2" /> {/* Adjusted margin */}
+                              <Trash2 size={16} className="mr-2" />
                               <span>Delete Board</span>
                             </button>
                           </div>
@@ -1422,18 +1471,28 @@ const KanbanApp = () => {
             </div>
             
             {!collapsedBoards[board.id] && (
-              <div className="p-4">
+              <div 
+                className="p-4"
+                onDragOver={handleBoardAreaDragOver}
+                onDragLeave={handleBoardAreaDragLeave}
+                onDrop={(e) => handleBoardAreaDrop(e, board.id)}
+              >
                 <div className="">
                   {board.tasks.map(task => renderTask(task, board.id))}
                 </div>
                 
+                {/* IMPROVED: Drop zone indicator when dragging tasks */}
+                {dragging && !draggingBoard && board.tasks.length === 0 && (
+                  <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-300 rounded-lg">
+                    Drop task here
+                  </div>
+                )}
               </div>
             )}
           </div>
         ))}
       </SimpleMasonry>
 
-      {/* Render date picker globally if showDatePicker is active */}
       {showDatePicker && renderDatePicker(showDatePicker.taskId, showDatePicker.boardId)}
     </div>
   );
