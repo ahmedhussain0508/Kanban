@@ -17,7 +17,6 @@
     "concurrently": "^8.2.2",
     "electron": "^29.2.0",
     "electron-builder": "^24.13.3",
-    "electron-is-dev": "^3.0.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "wait-on": "^7.2.0"
@@ -27,9 +26,10 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "electron-dev": "npx concurrently \"npm run start\" \"npx wait-on http://localhost:3000 && npx electron .\"",
+    "electron-dev": "concurrently \"npm run start\" \"wait-on http://localhost:3000 && electron .\"",
     "electron-pack": "npm run build && electron-builder",
-    "preelectron-pack": "npm run build"
+    "preelectron-pack": "npm run build",
+    "dist": "npm run build && electron-builder --publish=never"
   },
   "eslintConfig": {
     "extends": [
@@ -53,17 +53,34 @@
   "build": {
     "appId": "com.yourcompany.kanbanapp",
     "productName": "KanbanBoard",
-    "files": [
-      "build/**/*",
-      "node_modules/**/*",
-      "public/electron.js"
-    ],
     "directories": {
       "buildResources": "public"
     },
+    "files": [
+      "build/**/*",
+      "public/electron.js",
+      "node_modules/**/*"
+    ],
     "mac": {
       "category": "public.app-category.productivity",
-      "target": "dmg"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "public/icon.icns"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office"
     }
   }
 }
